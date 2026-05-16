@@ -56,6 +56,24 @@ TTS_MODELS = {
     "inworld-tts-1.5-mini": "Inworld TTS 1.5 Mini",
     "inworld-tts-1.5-max": "Inworld TTS 1.5 Max",
 }
+EDGE_VOICE_EXAMPLES = [
+    "ru-RU-DmitryNeural",
+    "ru-RU-SvetlanaNeural",
+    "uk-UA-OstapNeural",
+    "uk-UA-PolinaNeural",
+    "en-US-GuyNeural",
+    "en-US-JennyNeural",
+]
+INWORLD_VOICE_EXAMPLES = [
+    "Dmitry",
+    "Elena",
+    "Nikolai",
+    "Svetlana",
+    "Ashley",
+    "Dennis",
+    "Alex",
+    "Ava",
+]
 MAX_CHARS = int(os.getenv("MAX_CHARS", "3500"))
 TTS_TIMEOUT_SECONDS = int(os.getenv("TTS_TIMEOUT_SECONDS", "120"))
 SEND_TIMEOUT_SECONDS = int(os.getenv("SEND_TIMEOUT_SECONDS", "120"))
@@ -92,32 +110,19 @@ TEXTS = {
             "Default voice: {default_voice}\n"
             "Current model: {model_name}\n\n"
             "Change TTS model: /settings\n\n"
-            "Voice examples:\n"
-            "ru-RU-DmitryNeural — Russian male\n"
-            "ru-RU-SvetlanaNeural — Russian female\n"
-            "en-US-GuyNeural — English male\n"
-            "en-US-JennyNeural — English female\n\n"
-            "Change voice: /voice ru-RU-SvetlanaNeural\n"
+            "{voice_examples}\n\n"
+            "Change voice: /voice {voice_example}\n"
             "Change interface language: /language"
         ),
-        "voices": (
-            "Popular voices:\n"
-            "• ru-RU-DmitryNeural\n"
-            "• ru-RU-SvetlanaNeural\n"
-            "• uk-UA-OstapNeural\n"
-            "• uk-UA-PolinaNeural\n"
-            "• en-US-GuyNeural\n"
-            "• en-US-JennyNeural\n\n"
-            "Full list on the server:\n"
-            "python -m edge_tts --list-voices"
-        ),
+        "voices_edge": "Edge TTS voice examples:\n{voices}\n\nFull Edge list on the server:\npython -m edge_tts --list-voices",
+        "voices_inworld": "Inworld voice examples for {model_name}:\n{voices}\n\nUse: /voice Ashley\nRussian voices available: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Choose interface language:",
         "language_set": "Interface language set to English.",
         "settings_prompt": "⚙️ Settings\nCurrent TTS model: {model_name}\n\nChoose model:",
         "model_set": "TTS model set to: {model_name}",
         "settings_button": "⚙️ Settings",
-        "current_voice": "Current voice: {voice}\nChange it: /voice ru-RU-SvetlanaNeural\nFor Inworld voices use names like Ashley or Dennis.",
-        "invalid_voice": "This does not look like a valid voice name. Example: /voice ru-RU-SvetlanaNeural",
+        "current_voice": "Current model: {model_name}\nCurrent voice: {voice}\n{hint}",
+        "invalid_voice": "This does not look like a valid voice for the current model. Example: /voice {example}",
         "voice_set": "OK, voice for this chat: {voice}",
         "empty_text": "Send non-empty text.",
         "too_long": "Text is too long: {length} characters. Limit: {max_chars}.",
@@ -169,36 +174,23 @@ TEXTS = {
             "Голос по умолчанию: {default_voice}\n"
             "Текущая модель: {model_name}\n\n"
             "Сменить TTS модель: /settings\n\n"
-            "Примеры голосов:\n"
-            "ru-RU-DmitryNeural — русский мужской\n"
-            "ru-RU-SvetlanaNeural — русский женский\n"
-            "en-US-GuyNeural — английский мужской\n"
-            "en-US-JennyNeural — английский женский\n\n"
-            "Сменить голос: /voice ru-RU-SvetlanaNeural\n"
+            "{voice_examples}\n\n"
+            "Сменить голос: /voice {voice_example}\n"
             "Сменить язык интерфейса: /language"
         ),
-        "voices": (
-            "Популярные голоса:\n"
-            "• ru-RU-DmitryNeural\n"
-            "• ru-RU-SvetlanaNeural\n"
-            "• uk-UA-OstapNeural\n"
-            "• uk-UA-PolinaNeural\n"
-            "• en-US-GuyNeural\n"
-            "• en-US-JennyNeural\n\n"
-            "Полный список на сервере:\n"
-            "python -m edge_tts --list-voices"
-        ),
+        "voices_edge": "Примеры голосов Edge TTS:\n{voices}\n\nПолный список Edge на сервере:\npython -m edge_tts --list-voices",
+        "voices_inworld": "Примеры голосов Inworld для {model_name}:\n{voices}\n\nИспользуй: /voice Ashley\nРусские голоса: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Выбери язык интерфейса:",
         "language_set": "Язык интерфейса: русский.",
         "settings_prompt": "⚙️ Настройки\nТекущая TTS модель: {model_name}\n\nВыбери модель:",
         "model_set": "TTS модель: {model_name}",
         "settings_button": "⚙️ Настройки",
-        "current_voice": "Текущий голос: {voice}\nСменить: /voice ru-RU-SvetlanaNeural\nДля Inworld можно использовать имена вроде Ashley или Dennis.",
-        "invalid_voice": "Похоже на неверное имя голоса. Пример: /voice ru-RU-SvetlanaNeural",
+        "current_voice": "Текущая модель: {model_name}\nТекущий голос: {voice}\n{hint}",
+        "invalid_voice": "Похоже на неверный голос для текущей модели. Пример: /voice {example}",
         "voice_set": "Ок, голос для этого чата: {voice}",
         "empty_text": "Пришли непустой текст.",
         "too_long": "Текст слишком длинный: {length} символов. Лимит: {max_chars}.",
-        "caption_voice": "Голос: {voice}",
+        "caption_voice": "Модель: {model_name}\nГолос: {voice}",
         "processing": "⏳ Генерирую аудио… Для длинного текста это может занять немного времени.",
         "sending_audio": "📤 Аудио готово, загружаю…",
         "tts_failed": "Не смог сгенерировать аудио: {error}",
@@ -295,6 +287,24 @@ def get_voice_for_model(context: ContextTypes.DEFAULT_TYPE, model: str) -> str:
     if model == "edge":
         return context.user_data.get("edge_voice") or context.user_data.get("voice", DEFAULT_VOICE)
     return context.user_data.get("inworld_voice") or INWORLD_DEFAULT_VOICE
+
+
+def voice_example_for_model(model: str) -> str:
+    return "ru-RU-SvetlanaNeural" if model == "edge" else "Dmitry"
+
+
+def voice_hint_for_model(context: ContextTypes.DEFAULT_TYPE, model: str) -> str:
+    if model == "edge":
+        return "Change it: /voice ru-RU-SvetlanaNeural" if get_lang(context) == "en" else "Сменить: /voice ru-RU-SvetlanaNeural"
+    return "Change it: /voice Dmitry, Elena, Nikolai, Svetlana, Ashley…" if get_lang(context) == "en" else "Сменить: /voice Dmitry, Elena, Nikolai, Svetlana, Ashley…"
+
+
+def voice_examples_text(context: ContextTypes.DEFAULT_TYPE, model: str) -> str:
+    voices = INWORLD_VOICE_EXAMPLES if model != "edge" else EDGE_VOICE_EXAMPLES
+    bullet_list = "\n".join(f"• {voice}" for voice in voices)
+    if model == "edge":
+        return t(context, "voices_edge", voices=bullet_list)
+    return t(context, "voices_inworld", voices=bullet_list, model_name=get_tts_model_name(model))
 
 
 def utc_now() -> str:
@@ -442,7 +452,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id if update.effective_user else None
     model = get_tts_model(context)
     await update.message.reply_text(
-        t(context, "help", max_chars=MAX_CHARS, default_voice=DEFAULT_VOICE, model_name=get_tts_model_name(model)),
+        t(
+            context,
+            "help",
+            max_chars=MAX_CHARS,
+            default_voice=get_voice_for_model(context, model),
+            model_name=get_tts_model_name(model),
+            voice_examples=voice_examples_text(context, model),
+            voice_example=voice_example_for_model(model),
+        ),
         reply_markup=main_menu(context, user_id),
     )
 
@@ -450,7 +468,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def voices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update, context, "voices")
     user_id = update.effective_user.id if update.effective_user else None
-    await update.message.reply_text(t(context, "voices"), reply_markup=main_menu(context, user_id))
+    model = get_tts_model(context)
+    await update.message.reply_text(voice_examples_text(context, model), reply_markup=main_menu(context, user_id))
 
 
 async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -495,7 +514,13 @@ async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id if update.effective_user else None
     await query.edit_message_text(t(context, "model_set", model_name=get_tts_model_name(model)))
     await query.message.reply_text(
-        t(context, "current_voice", voice=get_voice_for_model(context, model)),
+        t(
+            context,
+            "current_voice",
+            model_name=get_tts_model_name(model),
+            voice=get_voice_for_model(context, model),
+            hint=voice_hint_for_model(context, model),
+        ),
         reply_markup=main_menu(context, user_id),
     )
 
@@ -506,18 +531,27 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     model = get_tts_model(context)
     if not context.args:
         current = get_voice_for_model(context, model)
-        await update.message.reply_text(t(context, "current_voice", voice=current), reply_markup=main_menu(context, user_id))
+        await update.message.reply_text(
+            t(
+                context,
+                "current_voice",
+                model_name=get_tts_model_name(model),
+                voice=current,
+                hint=voice_hint_for_model(context, model),
+            ),
+            reply_markup=main_menu(context, user_id),
+        )
         return
     voice = context.args[0].strip()
     if model == "edge":
         if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural", voice):
-            await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
+            await update.message.reply_text(t(context, "invalid_voice", example=voice_example_for_model(model)), reply_markup=main_menu(context, user_id))
             return
         context.user_data["edge_voice"] = voice
         context.user_data["voice"] = voice  # backward compatibility with existing saved state
     else:
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{2,80}", voice):
-            await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
+            await update.message.reply_text(t(context, "invalid_voice", example=voice_example_for_model(model)), reply_markup=main_menu(context, user_id))
             return
         context.user_data["inworld_voice"] = voice
     await update.message.reply_text(t(context, "voice_set", voice=voice), reply_markup=main_menu(context, user_id))
