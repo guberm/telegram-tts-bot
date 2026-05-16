@@ -18,6 +18,7 @@ from pathlib import Path
 
 import edge_tts
 from dotenv import load_dotenv
+from inworld_tts import InworldTTS
 from telegram import (
     BotCommand,
     BotCommandScopeChat,
@@ -44,6 +45,17 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 DEFAULT_VOICE = os.getenv("TTS_VOICE", "ru-RU-DmitryNeural").strip()
 DEFAULT_RATE = os.getenv("TTS_RATE", "+0%").strip()
 DEFAULT_VOLUME = os.getenv("TTS_VOLUME", "+0%").strip()
+DEFAULT_TTS_MODEL = os.getenv("TTS_MODEL", "edge").strip() or "edge"
+INWORLD_DEFAULT_VOICE = os.getenv("INWORLD_VOICE", "Ashley").strip() or "Ashley"
+INWORLD_LANGUAGE = os.getenv("INWORLD_LANGUAGE", "ru-RU").strip() or "ru-RU"
+INWORLD_DELIVERY_MODE = os.getenv("INWORLD_DELIVERY_MODE", "BALANCED").strip() or "BALANCED"
+INWORLD_API_KEY = os.getenv("INWORLD_API_KEY", "").strip()
+TTS_MODELS = {
+    "edge": "Edge TTS (free)",
+    "inworld-tts-2": "Inworld Realtime TTS-2",
+    "inworld-tts-1.5-mini": "Inworld TTS 1.5 Mini",
+    "inworld-tts-1.5-max": "Inworld TTS 1.5 Max",
+}
 MAX_CHARS = int(os.getenv("MAX_CHARS", "3500"))
 TTS_TIMEOUT_SECONDS = int(os.getenv("TTS_TIMEOUT_SECONDS", "120"))
 SEND_TIMEOUT_SECONDS = int(os.getenv("SEND_TIMEOUT_SECONDS", "120"))
@@ -53,6 +65,7 @@ ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", ""
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ru"}
 LANG_BUTTON_TEXTS = {"🌐 Language", "🌐 Язык", "Language", "Язык"}
+SETTINGS_BUTTON_TEXTS = {"⚙️ Settings", "⚙️ Настройки", "Settings", "Настройки"}
 ADMIN_BUTTON_TEXTS = {"👑 Admin", "👑 Админ", "Admin", "Админ"}
 
 logging.basicConfig(
@@ -69,13 +82,16 @@ TEXTS = {
             "Send me text and I will return an MP3 audio file.\n\n"
             "Commands:\n"
             "/voice <voice> — change the TTS voice for this chat\n"
+            "/settings — choose TTS model\n"
             "/voices — voice examples\n"
             "/language — choose interface language\n"
             "/help — help"
         ),
         "help": (
             "Just send text up to {max_chars} characters.\n"
-            "Default voice: {default_voice}\n\n"
+            "Default voice: {default_voice}\n"
+            "Current model: {model_name}\n\n"
+            "Change TTS model: /settings\n\n"
             "Voice examples:\n"
             "ru-RU-DmitryNeural — Russian male\n"
             "ru-RU-SvetlanaNeural — Russian female\n"
@@ -97,12 +113,15 @@ TEXTS = {
         ),
         "language_prompt": "Choose interface language:",
         "language_set": "Interface language set to English.",
-        "current_voice": "Current voice: {voice}\nChange it: /voice ru-RU-SvetlanaNeural",
+        "settings_prompt": "⚙️ Settings\nCurrent TTS model: {model_name}\n\nChoose model:",
+        "model_set": "TTS model set to: {model_name}",
+        "settings_button": "⚙️ Settings",
+        "current_voice": "Current voice: {voice}\nChange it: /voice ru-RU-SvetlanaNeural\nFor Inworld voices use names like Ashley or Dennis.",
         "invalid_voice": "This does not look like a valid voice name. Example: /voice ru-RU-SvetlanaNeural",
         "voice_set": "OK, voice for this chat: {voice}",
         "empty_text": "Send non-empty text.",
         "too_long": "Text is too long: {length} characters. Limit: {max_chars}.",
-        "caption_voice": "Voice: {voice}",
+        "caption_voice": "Model: {model_name}\nVoice: {voice}",
         "processing": "⏳ Generating audio… This can take a bit for long text.",
         "sending_audio": "📤 Audio is ready, uploading…",
         "tts_failed": "Could not generate audio: {error}",
@@ -121,6 +140,7 @@ TEXTS = {
             "Requests: {requests}\n"
             "Successful TTS: {tts_success}\n"
             "Failed TTS: {tts_failed}\n"
+            "By model: {by_model}\n"
             "Admin IDs: {admin_ids}"
         ),
         "users_empty": "No users recorded yet.",
@@ -139,13 +159,16 @@ TEXTS = {
             "Пришли мне текст — я верну MP3-аудиофайл.\n\n"
             "Команды:\n"
             "/voice <voice> — сменить голос для этого чата\n"
+            "/settings — выбрать TTS модель\n"
             "/voices — подсказка по голосам\n"
             "/language — выбрать язык интерфейса\n"
             "/help — помощь"
         ),
         "help": (
             "Просто отправь текст до {max_chars} символов.\n"
-            "Голос по умолчанию: {default_voice}\n\n"
+            "Голос по умолчанию: {default_voice}\n"
+            "Текущая модель: {model_name}\n\n"
+            "Сменить TTS модель: /settings\n\n"
             "Примеры голосов:\n"
             "ru-RU-DmitryNeural — русский мужской\n"
             "ru-RU-SvetlanaNeural — русский женский\n"
@@ -167,7 +190,10 @@ TEXTS = {
         ),
         "language_prompt": "Выбери язык интерфейса:",
         "language_set": "Язык интерфейса: русский.",
-        "current_voice": "Текущий голос: {voice}\nСменить: /voice ru-RU-SvetlanaNeural",
+        "settings_prompt": "⚙️ Настройки\nТекущая TTS модель: {model_name}\n\nВыбери модель:",
+        "model_set": "TTS модель: {model_name}",
+        "settings_button": "⚙️ Настройки",
+        "current_voice": "Текущий голос: {voice}\nСменить: /voice ru-RU-SvetlanaNeural\nДля Inworld можно использовать имена вроде Ashley или Dennis.",
         "invalid_voice": "Похоже на неверное имя голоса. Пример: /voice ru-RU-SvetlanaNeural",
         "voice_set": "Ок, голос для этого чата: {voice}",
         "empty_text": "Пришли непустой текст.",
@@ -191,6 +217,7 @@ TEXTS = {
             "Запросов: {requests}\n"
             "Успешных TTS: {tts_success}\n"
             "Ошибок TTS: {tts_failed}\n"
+            "По моделям: {by_model}\n"
             "Admin IDs: {admin_ids}"
         ),
         "users_empty": "Пользователей пока нет.",
@@ -230,7 +257,7 @@ def is_admin(user_id: int | None) -> bool:
 
 
 def main_menu(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> ReplyKeyboardMarkup:
-    rows = [[TEXTS[get_lang(context)]["main_menu_button"]]]
+    rows = [[TEXTS[get_lang(context)]["main_menu_button"], TEXTS[get_lang(context)]["settings_button"]]]
     if is_admin(user_id):
         rows.append([TEXTS[get_lang(context)]["admin_menu_button"]])
     return ReplyKeyboardMarkup(
@@ -247,6 +274,29 @@ def language_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def get_tts_model(context: ContextTypes.DEFAULT_TYPE) -> str:
+    model = context.user_data.get("tts_model", DEFAULT_TTS_MODEL)
+    return model if model in TTS_MODELS else "edge"
+
+
+def get_tts_model_name(model: str) -> str:
+    return TTS_MODELS.get(model, model)
+
+
+def model_keyboard(current_model: str) -> InlineKeyboardMarkup:
+    rows = []
+    for model, label in TTS_MODELS.items():
+        prefix = "✅ " if model == current_model else ""
+        rows.append([InlineKeyboardButton(prefix + label, callback_data=f"model:{model}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def get_voice_for_model(context: ContextTypes.DEFAULT_TYPE, model: str) -> str:
+    if model == "edge":
+        return context.user_data.get("edge_voice") or context.user_data.get("voice", DEFAULT_VOICE)
+    return context.user_data.get("inworld_voice") or INWORLD_DEFAULT_VOICE
+
+
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -259,10 +309,11 @@ def display_user(user: object) -> str:
     return name or getattr(user, "username", None) or str(getattr(user, "id", "unknown"))
 
 
-def get_stats(context: ContextTypes.DEFAULT_TYPE) -> dict[str, int]:
+def get_stats(context: ContextTypes.DEFAULT_TYPE) -> dict[str, object]:
     stats = context.bot_data.setdefault("stats", {})
     for key in ("requests", "tts_success", "tts_failed"):
         stats.setdefault(key, 0)
+    stats.setdefault("by_model", {})
     return stats
 
 
@@ -318,17 +369,39 @@ def require_admin(update: Update) -> bool:
     return is_admin(update.effective_user.id if update.effective_user else None)
 
 
-async def synthesize_mp3(text: str, voice: str = DEFAULT_VOICE) -> Path:
+async def synthesize_mp3(text: str, model: str = "edge", voice: str = DEFAULT_VOICE) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_DIR / f"tts_{uuid.uuid4().hex}.mp3"
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice=voice,
-        rate=DEFAULT_RATE,
-        volume=DEFAULT_VOLUME,
-    )
-    await communicate.save(str(out))
-    return out
+    if model == "edge":
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+            rate=DEFAULT_RATE,
+            volume=DEFAULT_VOLUME,
+        )
+        await communicate.save(str(out))
+        return out
+
+    if model.startswith("inworld-tts"):
+        if not INWORLD_API_KEY:
+            raise RuntimeError("INWORLD_API_KEY is not configured on the server")
+
+        def generate_inworld() -> None:
+            tts_client = InworldTTS(api_key=INWORLD_API_KEY)
+            tts_client.generate(
+                text=text,
+                voice=voice,
+                model=model,
+                encoding="MP3",
+                language=INWORLD_LANGUAGE,
+                delivery_mode=INWORLD_DELIVERY_MODE,
+                output_file=str(out),
+            )
+
+        await asyncio.to_thread(generate_inworld)
+        return out
+
+    raise ValueError(f"Unsupported TTS model: {model}")
 
 
 async def keep_upload_action(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
@@ -367,8 +440,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update, context, "help")
     user_id = update.effective_user.id if update.effective_user else None
+    model = get_tts_model(context)
     await update.message.reply_text(
-        t(context, "help", max_chars=MAX_CHARS, default_voice=DEFAULT_VOICE),
+        t(context, "help", max_chars=MAX_CHARS, default_voice=DEFAULT_VOICE, model_name=get_tts_model_name(model)),
         reply_markup=main_menu(context, user_id),
     )
 
@@ -399,18 +473,53 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.message.reply_text(TEXTS[lang]["start"], reply_markup=main_menu(context, user_id))
 
 
+async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log_update(update, "settings")
+    await register_user(update, context, "settings")
+    model = get_tts_model(context)
+    await update.message.reply_text(
+        t(context, "settings_prompt", model_name=get_tts_model_name(model)),
+        reply_markup=model_keyboard(model),
+    )
+
+
+async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log_update(update, "model_callback")
+    await register_user(update, context, "model_callback")
+    query = update.callback_query
+    await query.answer()
+    model = query.data.split(":", 1)[1]
+    if model not in TTS_MODELS:
+        model = "edge"
+    context.user_data["tts_model"] = model
+    user_id = update.effective_user.id if update.effective_user else None
+    await query.edit_message_text(t(context, "model_set", model_name=get_tts_model_name(model)))
+    await query.message.reply_text(
+        t(context, "current_voice", voice=get_voice_for_model(context, model)),
+        reply_markup=main_menu(context, user_id),
+    )
+
+
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update, context, "voice")
     user_id = update.effective_user.id if update.effective_user else None
+    model = get_tts_model(context)
     if not context.args:
-        current = context.user_data.get("voice", DEFAULT_VOICE)
+        current = get_voice_for_model(context, model)
         await update.message.reply_text(t(context, "current_voice", voice=current), reply_markup=main_menu(context, user_id))
         return
     voice = context.args[0].strip()
-    if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural", voice):
-        await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
-        return
-    context.user_data["voice"] = voice
+    if model == "edge":
+        if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural", voice):
+            await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
+            return
+        context.user_data["edge_voice"] = voice
+        context.user_data["voice"] = voice  # backward compatibility with existing saved state
+    else:
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{2,80}", voice):
+            await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
+            return
+        context.user_data["inworld_voice"] = voice
     await update.message.reply_text(t(context, "voice_set", voice=voice), reply_markup=main_menu(context, user_id))
 
 
@@ -429,6 +538,8 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     stats = get_stats(context)
     users = context.bot_data.setdefault("users", {})
+    by_model = stats.get("by_model", {})
+    by_model_text = ", ".join(f"{get_tts_model_name(model)}={count}" for model, count in sorted(by_model.items())) or "—"
     await update.message.reply_text(
         t(
             context,
@@ -437,6 +548,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             requests=stats["requests"],
             tts_success=stats["tts_success"],
             tts_failed=stats["tts_failed"],
+            by_model=by_model_text,
             admin_ids=", ".join(str(admin_id) for admin_id in sorted(ADMIN_IDS)) or "—",
         ),
         reply_markup=main_menu(context, update.effective_user.id),
@@ -480,6 +592,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if text in LANG_BUTTON_TEXTS:
         await language_cmd(update, context)
         return
+    if text in SETTINGS_BUTTON_TEXTS:
+        await settings_cmd(update, context)
+        return
     if text in ADMIN_BUTTON_TEXTS:
         await admin_cmd(update, context)
         return
@@ -495,20 +610,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     stats = get_stats(context)
     stats["requests"] += 1
-    voice = context.user_data.get("voice", DEFAULT_VOICE)
+    model = get_tts_model(context)
+    voice = get_voice_for_model(context, model)
     out: Path | None = None
     status_message = None
     action_task = None
     try:
         status_message = await msg.reply_text(t(context, "processing"), reply_markup=main_menu(context, user_id))
         action_task = asyncio.create_task(keep_upload_action(context, msg.chat_id))
-        log.info("Generating TTS: chat_id=%s user_id=%s chars=%s voice=%s", msg.chat_id, user_id, len(text), voice)
+        log.info(
+            "Generating TTS: chat_id=%s user_id=%s chars=%s model=%s voice=%s",
+            msg.chat_id,
+            user_id,
+            len(text),
+            model,
+            voice,
+        )
         out = await asyncio.wait_for(
-            synthesize_mp3(text, voice=voice),
+            synthesize_mp3(text, model=model, voice=voice),
             timeout=TTS_TIMEOUT_SECONDS,
         )
         log.info("TTS generated: chat_id=%s user_id=%s bytes=%s", msg.chat_id, user_id, out.stat().st_size)
         stats["tts_success"] += 1
+        by_model = stats.setdefault("by_model", {})
+        by_model[model] = by_model.get(model, 0) + 1
         with contextlib.suppress(Exception):
             await status_message.edit_text(t(context, "sending_audio"))
         title = text[:45].replace("\n", " ")
@@ -520,7 +645,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     audio=audio_file,
                     title=title,
                     performer="TTS Bot",
-                    caption=t(context, "caption_voice", voice=voice),
+                    caption=t(context, "caption_voice", model_name=get_tts_model_name(model), voice=voice),
                     reply_markup=main_menu(context, user_id),
                 ),
                 timeout=SEND_TIMEOUT_SECONDS,
@@ -556,6 +681,7 @@ async def setup_bot_commands(app: Application) -> None:
         BotCommand("help", "Help"),
         BotCommand("voices", "Voice examples"),
         BotCommand("voice", "Show or set voice"),
+        BotCommand("settings", "Choose TTS model"),
         BotCommand("language", "Choose language"),
     ]
     admin_commands = [
@@ -583,12 +709,14 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("voices", voices))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("settings", settings_cmd))
     app.add_handler(CommandHandler("language", language_cmd))
     app.add_handler(CommandHandler("lang", language_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("users", users_cmd))
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang:(en|ru)$"))
+    app.add_handler(CallbackQueryHandler(model_callback, pattern=r"^model:(edge|inworld-tts-2|inworld-tts-1\.5-mini|inworld-tts-1\.5-max)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     log.info("Starting Telegram TTS bot with default voice %s and default language %s", DEFAULT_VOICE, DEFAULT_LANG)

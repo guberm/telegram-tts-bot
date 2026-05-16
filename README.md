@@ -1,6 +1,6 @@
 # Telegram TTS Bot
 
-A small Telegram bot that converts any text message into an MP3 audio file using Microsoft Edge Text-to-Speech (`edge-tts`).
+A small Telegram bot that converts any text message into an MP3 audio file using Microsoft Edge Text-to-Speech (`edge-tts`) or Inworld Realtime TTS.
 
 Небольшой Telegram-бот, который принимает текстовое сообщение и возвращает MP3-аудиофайл, сгенерированный через Microsoft Edge Text-to-Speech (`edge-tts`).
 
@@ -11,8 +11,9 @@ A small Telegram bot that converts any text message into an MP3 audio file using
 ### Features
 
 - Send any text message and receive an MP3 audio reply.
-- Uses free Microsoft Edge neural voices via `edge-tts`.
+- Uses free Microsoft Edge neural voices via `edge-tts`, or Inworld Realtime TTS models when `INWORLD_API_KEY` is configured.
 - Supports Russian, Ukrainian, English, and many other languages.
+- Per-chat/user TTS model selection with `/settings`.
 - Per-chat/user voice selection with `/voice <voice>`.
 - Quick voice examples with `/voices`.
 - Configurable text length limit via `MAX_CHARS`.
@@ -44,9 +45,14 @@ Create `.env` from `.env.example`:
 
 ```env
 TELEGRAM_BOT_TOKEN=your_botfather_token_here
+TTS_MODEL=edge
 TTS_VOICE=ru-RU-DmitryNeural
 TTS_RATE=+0%
 TTS_VOLUME=+0%
+INWORLD_API_KEY=replace_me_base64_key
+INWORLD_VOICE=Ashley
+INWORLD_LANGUAGE=ru-RU
+INWORLD_DELIVERY_MODE=BALANCED
 MAX_CHARS=3500
 OUTPUT_DIR=/tmp/telegram-tts-bot
 LOG_LEVEL=INFO
@@ -56,9 +62,14 @@ ADMIN_IDS=your_telegram_user_id
 Configuration values:
 
 - `TELEGRAM_BOT_TOKEN`: required Telegram bot token from BotFather.
+- `TTS_MODEL`: default model/provider (`edge`, `inworld-tts-2`, `inworld-tts-1.5-mini`, `inworld-tts-1.5-max`).
 - `TTS_VOICE`: default Edge TTS voice.
 - `TTS_RATE`: speech rate, for example `+0%`, `-10%`, `+15%`.
 - `TTS_VOLUME`: speech volume, for example `+0%`, `-10%`, `+20%`.
+- `INWORLD_API_KEY`: Base64 Inworld API key for Inworld models.
+- `INWORLD_VOICE`: default Inworld voice, for example `Ashley` or `Dennis`.
+- `INWORLD_LANGUAGE`: BCP-47 language tag for Inworld, for example `ru-RU`.
+- `INWORLD_DELIVERY_MODE`: TTS-2 delivery mode: `STABLE`, `BALANCED`, or `CREATIVE`.
 - `MAX_CHARS`: maximum input text length.
 - `OUTPUT_DIR`: temporary directory for generated MP3 files.
 - `LOG_LEVEL`: Python logging level.
@@ -69,6 +80,7 @@ Configuration values:
 - `/start` — start message.
 - `/help` — usage help.
 - `/voices` — show common voice examples.
+- `/settings` — choose Edge or Inworld TTS model.
 - `/voice` — show the current voice.
 - `/voice ru-RU-SvetlanaNeural` — change voice for the current user/chat.
 
