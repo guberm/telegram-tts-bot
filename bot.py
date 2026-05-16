@@ -11,11 +11,20 @@ import os
 import re
 import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import edge_tts
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -36,9 +45,11 @@ DEFAULT_VOLUME = os.getenv("TTS_VOLUME", "+0%").strip()
 MAX_CHARS = int(os.getenv("MAX_CHARS", "3500"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", tempfile.gettempdir())).expanduser()
 PERSISTENCE_FILE = Path(os.getenv("PERSISTENCE_FILE", "data/bot-state.pickle")).expanduser()
+ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "").strip()) if part.isdigit()}
 DEFAULT_LANG = "en"
 SUPPORTED_LANGS = {"en", "ru"}
 LANG_BUTTON_TEXTS = {"🌐 Language", "🌐 Язык", "Language", "Язык"}
+ADMIN_BUTTON_TEXTS = {"👑 Admin", "👑 Админ", "Admin", "Админ"}
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -90,6 +101,32 @@ TEXTS = {
         "caption_voice": "Voice: {voice}",
         "tts_failed": "Could not generate audio: {error}",
         "main_menu_button": "🌐 Language",
+        "admin_menu_button": "👑 Admin",
+        "admin_only": "Admin-only command.",
+        "admin_menu": (
+            "👑 Admin menu\n\n"
+            "/stats — bot statistics\n"
+            "/users — recent users\n"
+            "/admin — this menu"
+        ),
+        "stats": (
+            "📊 Bot statistics\n"
+            "Users: {users}\n"
+            "Requests: {requests}\n"
+            "Successful TTS: {tts_success}\n"
+            "Failed TTS: {tts_failed}\n"
+            "Admin IDs: {admin_ids}"
+        ),
+        "users_empty": "No users recorded yet.",
+        "users_header": "👥 Users ({count} total, showing {shown}):\n",
+        "new_user_notice": (
+            "🆕 New TTS bot user\n"
+            "ID: {id}\n"
+            "Name: {name}\n"
+            "Username: {username}\n"
+            "Language: {language_code}\n"
+            "Source: {source}"
+        ),
     },
     "ru": {
         "start": (
@@ -132,6 +169,32 @@ TEXTS = {
         "caption_voice": "Голос: {voice}",
         "tts_failed": "Не смог сгенерировать аудио: {error}",
         "main_menu_button": "🌐 Язык",
+        "admin_menu_button": "👑 Админ",
+        "admin_only": "Команда только для админа.",
+        "admin_menu": (
+            "👑 Админ-меню\n\n"
+            "/stats — статистика бота\n"
+            "/users — последние пользователи\n"
+            "/admin — это меню"
+        ),
+        "stats": (
+            "📊 Статистика бота\n"
+            "Пользователей: {users}\n"
+            "Запросов: {requests}\n"
+            "Успешных TTS: {tts_success}\n"
+            "Ошибок TTS: {tts_failed}\n"
+            "Admin IDs: {admin_ids}"
+        ),
+        "users_empty": "Пользователей пока нет.",
+        "users_header": "👥 Пользователи ({count} всего, показано {shown}):\n",
+        "new_user_notice": (
+            "🆕 Новый пользователь TTS bot\n"
+            "ID: {id}\n"
+            "Имя: {name}\n"
+            "Username: {username}\n"
+            "Язык: {language_code}\n"
+            "Источник: {source}"
+        ),
     },
 }
 
@@ -154,9 +217,16 @@ def t(context: ContextTypes.DEFAULT_TYPE, key: str, **kwargs: object) -> str:
     return template.format(**kwargs)
 
 
-def main_menu(context: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
+def is_admin(user_id: int | None) -> bool:
+    return bool(user_id and user_id in ADMIN_IDS)
+
+
+def main_menu(context: ContextTypes.DEFAULT_TYPE, user_id: int | None = None) -> ReplyKeyboardMarkup:
+    rows = [[TEXTS[get_lang(context)]["main_menu_button"]]]
+    if is_admin(user_id):
+        rows.append([TEXTS[get_lang(context)]["admin_menu_button"]])
     return ReplyKeyboardMarkup(
-        [[TEXTS[get_lang(context)]["main_menu_button"]]],
+        rows,
         resize_keyboard=True,
         one_time_keyboard=False,
         input_field_placeholder="Type text for TTS",
@@ -167,6 +237,77 @@ def language_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("English", callback_data="lang:en"), InlineKeyboardButton("Русский", callback_data="lang:ru")]]
     )
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def display_user(user: object) -> str:
+    if not user:
+        return "unknown"
+    name_parts = [getattr(user, "first_name", None), getattr(user, "last_name", None)]
+    name = " ".join(part for part in name_parts if part).strip()
+    return name or getattr(user, "username", None) or str(getattr(user, "id", "unknown"))
+
+
+def get_stats(context: ContextTypes.DEFAULT_TYPE) -> dict[str, int]:
+    stats = context.bot_data.setdefault("stats", {})
+    for key in ("requests", "tts_success", "tts_failed"):
+        stats.setdefault(key, 0)
+    return stats
+
+
+async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str, skip_user_id: int | None = None) -> None:
+    for admin_id in ADMIN_IDS:
+        if admin_id == skip_user_id:
+            continue
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text)
+        except Exception:
+            log.exception("Could not notify admin_id=%s", admin_id)
+
+
+async def register_user(update: Update, context: ContextTypes.DEFAULT_TYPE, source: str) -> None:
+    user = update.effective_user
+    if not user or user.is_bot:
+        return
+
+    users = context.bot_data.setdefault("users", {})
+    user_id = str(user.id)
+    now = utc_now()
+    is_new = user_id not in users
+    record = users.setdefault(user_id, {"id": user.id, "first_seen": now})
+    record.update(
+        {
+            "id": user.id,
+            "username": user.username or "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "language_code": user.language_code or "",
+            "is_admin": is_admin(user.id),
+            "last_seen": now,
+            "last_source": source,
+        }
+    )
+    if update.effective_chat:
+        chats = set(record.get("chat_ids", []))
+        chats.add(update.effective_chat.id)
+        record["chat_ids"] = sorted(chats)
+
+    if is_new:
+        notice = TEXTS["ru"]["new_user_notice"].format(
+            id=user.id,
+            name=display_user(user),
+            username=f"@{user.username}" if user.username else "—",
+            language_code=user.language_code or "—",
+            source=source,
+        )
+        await notify_admins(context, notice, skip_user_id=user.id if is_admin(user.id) else None)
+
+
+def require_admin(update: Update) -> bool:
+    return is_admin(update.effective_user.id if update.effective_user else None)
 
 
 async def synthesize_mp3(text: str, voice: str = DEFAULT_VOICE) -> Path:
@@ -201,76 +342,149 @@ def log_update(update: Update, event: str) -> None:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log_update(update, "start")
-    await update.message.reply_text(t(context, "start"), reply_markup=main_menu(context))
+    await register_user(update, context, "start")
+    user_id = update.effective_user.id if update.effective_user else None
+    await update.message.reply_text(t(context, "start"), reply_markup=main_menu(context, user_id))
     await update.message.reply_text(t(context, "language_prompt"), reply_markup=language_keyboard())
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await register_user(update, context, "help")
+    user_id = update.effective_user.id if update.effective_user else None
     await update.message.reply_text(
         t(context, "help", max_chars=MAX_CHARS, default_voice=DEFAULT_VOICE),
-        reply_markup=main_menu(context),
+        reply_markup=main_menu(context, user_id),
     )
 
 
 async def voices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(t(context, "voices"), reply_markup=main_menu(context))
+    await register_user(update, context, "voices")
+    user_id = update.effective_user.id if update.effective_user else None
+    await update.message.reply_text(t(context, "voices"), reply_markup=main_menu(context, user_id))
 
 
 async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log_update(update, "language")
+    await register_user(update, context, "language")
     await update.message.reply_text(t(context, "language_prompt"), reply_markup=language_keyboard())
 
 
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log_update(update, "language_callback")
+    await register_user(update, context, "language_callback")
     query = update.callback_query
     await query.answer()
     lang = query.data.split(":", 1)[1]
     if lang not in SUPPORTED_LANGS:
         lang = DEFAULT_LANG
     context.user_data["lang"] = lang
+    user_id = update.effective_user.id if update.effective_user else None
     await query.edit_message_text(TEXTS[lang]["language_set"])
-    await query.message.reply_text(TEXTS[lang]["start"], reply_markup=main_menu(context))
+    await query.message.reply_text(TEXTS[lang]["start"], reply_markup=main_menu(context, user_id))
 
 
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await register_user(update, context, "voice")
+    user_id = update.effective_user.id if update.effective_user else None
     if not context.args:
         current = context.user_data.get("voice", DEFAULT_VOICE)
-        await update.message.reply_text(t(context, "current_voice", voice=current), reply_markup=main_menu(context))
+        await update.message.reply_text(t(context, "current_voice", voice=current), reply_markup=main_menu(context, user_id))
         return
     voice = context.args[0].strip()
     if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural", voice):
-        await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context))
+        await update.message.reply_text(t(context, "invalid_voice"), reply_markup=main_menu(context, user_id))
         return
     context.user_data["voice"] = voice
-    await update.message.reply_text(t(context, "voice_set", voice=voice), reply_markup=main_menu(context))
+    await update.message.reply_text(t(context, "voice_set", voice=voice), reply_markup=main_menu(context, user_id))
+
+
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await register_user(update, context, "admin")
+    if not require_admin(update):
+        await update.message.reply_text(t(context, "admin_only"))
+        return
+    await update.message.reply_text(t(context, "admin_menu"), reply_markup=main_menu(context, update.effective_user.id))
+
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await register_user(update, context, "stats")
+    if not require_admin(update):
+        await update.message.reply_text(t(context, "admin_only"))
+        return
+    stats = get_stats(context)
+    users = context.bot_data.setdefault("users", {})
+    await update.message.reply_text(
+        t(
+            context,
+            "stats",
+            users=len(users),
+            requests=stats["requests"],
+            tts_success=stats["tts_success"],
+            tts_failed=stats["tts_failed"],
+            admin_ids=", ".join(str(admin_id) for admin_id in sorted(ADMIN_IDS)) or "—",
+        ),
+        reply_markup=main_menu(context, update.effective_user.id),
+    )
+
+
+async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await register_user(update, context, "users")
+    if not require_admin(update):
+        await update.message.reply_text(t(context, "admin_only"))
+        return
+    users = list(context.bot_data.setdefault("users", {}).values())
+    if not users:
+        await update.message.reply_text(t(context, "users_empty"), reply_markup=main_menu(context, update.effective_user.id))
+        return
+    users.sort(key=lambda item: item.get("last_seen", ""), reverse=True)
+    shown = users[:20]
+    lines = [t(context, "users_header", count=len(users), shown=len(shown))]
+    for record in shown:
+        username = f"@{record['username']}" if record.get("username") else "—"
+        full_name = " ".join(part for part in [record.get("first_name"), record.get("last_name")] if part).strip() or "—"
+        marker = " 👑" if record.get("is_admin") else ""
+        lines.append(
+            f"• {full_name}{marker}\n"
+            f"  ID: {record.get('id')} | {username}\n"
+            f"  Lang: {record.get('language_code') or '—'} | Last: {record.get('last_seen') or '—'}\n"
+            f"  Source: {record.get('last_source') or '—'}"
+        )
+    await update.message.reply_text("\n".join(lines), reply_markup=main_menu(context, update.effective_user.id))
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log_update(update, "text")
+    await register_user(update, context, "text")
     msg = update.message
     if not msg or not msg.text:
         return
 
+    user_id = update.effective_user.id if update.effective_user else None
     text = clean_text(msg.text)
     if text in LANG_BUTTON_TEXTS:
         await language_cmd(update, context)
         return
+    if text in ADMIN_BUTTON_TEXTS:
+        await admin_cmd(update, context)
+        return
     if not text:
-        await msg.reply_text(t(context, "empty_text"), reply_markup=main_menu(context))
+        await msg.reply_text(t(context, "empty_text"), reply_markup=main_menu(context, user_id))
         return
     if len(text) > MAX_CHARS:
         await msg.reply_text(
             t(context, "too_long", length=len(text), max_chars=MAX_CHARS),
-            reply_markup=main_menu(context),
+            reply_markup=main_menu(context, user_id),
         )
         return
 
+    stats = get_stats(context)
+    stats["requests"] += 1
     voice = context.user_data.get("voice", DEFAULT_VOICE)
     out: Path | None = None
     try:
         await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_VOICE)
         out = await synthesize_mp3(text, voice=voice)
+        stats["tts_success"] += 1
         title = text[:45].replace("\n", " ")
         if len(text) > 45:
             title += "…"
@@ -280,11 +494,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 title=title,
                 performer="TTS Bot",
                 caption=t(context, "caption_voice", voice=voice),
-                reply_markup=main_menu(context),
+                reply_markup=main_menu(context, user_id),
             )
     except Exception as exc:  # noqa: BLE001 - user-facing bot should not crash on one bad request
+        stats["tts_failed"] += 1
         log.exception("TTS failed")
-        await msg.reply_text(t(context, "tts_failed", error=exc), reply_markup=main_menu(context))
+        await msg.reply_text(t(context, "tts_failed", error=exc), reply_markup=main_menu(context, user_id))
     finally:
         if out:
             try:
@@ -293,19 +508,44 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 log.warning("Could not remove temp file %s", out)
 
 
+async def setup_bot_commands(app: Application) -> None:
+    default_commands = [
+        BotCommand("start", "Start / language"),
+        BotCommand("help", "Help"),
+        BotCommand("voices", "Voice examples"),
+        BotCommand("voice", "Show or set voice"),
+        BotCommand("language", "Choose language"),
+    ]
+    admin_commands = [
+        *default_commands,
+        BotCommand("admin", "Admin menu"),
+        BotCommand("stats", "Bot statistics"),
+        BotCommand("users", "Recent users"),
+    ]
+    await app.bot.set_my_commands(default_commands, scope=BotCommandScopeDefault())
+    for admin_id in ADMIN_IDS:
+        try:
+            await app.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+        except Exception:
+            log.exception("Could not set admin commands for admin_id=%s", admin_id)
+
+
 def main() -> None:
     if not TOKEN:
         raise SystemExit("Missing TELEGRAM_BOT_TOKEN. Put it in .env or environment.")
 
     PERSISTENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
     persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
-    app = Application.builder().token(TOKEN).persistence(persistence).build()
+    app = Application.builder().token(TOKEN).persistence(persistence).post_init(setup_bot_commands).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("voices", voices))
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("language", language_cmd))
     app.add_handler(CommandHandler("lang", language_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("users", users_cmd))
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang:(en|ru)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 

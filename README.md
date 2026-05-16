@@ -18,6 +18,7 @@ A small Telegram bot that converts any text message into an MP3 audio file using
 - Configurable text length limit via `MAX_CHARS`.
 - Polling mode: no webhook, public domain, or SSL certificate required.
 - Optional Docker and systemd service setup.
+- Admin-only menu/commands for configured `ADMIN_IDS`: new-user notifications, `/users`, `/stats`, `/admin`.
 
 ### Quick start
 
@@ -49,6 +50,7 @@ TTS_VOLUME=+0%
 MAX_CHARS=3500
 OUTPUT_DIR=/tmp/telegram-tts-bot
 LOG_LEVEL=INFO
+ADMIN_IDS=your_telegram_user_id
 ```
 
 Configuration values:
@@ -60,6 +62,7 @@ Configuration values:
 - `MAX_CHARS`: maximum input text length.
 - `OUTPUT_DIR`: temporary directory for generated MP3 files.
 - `LOG_LEVEL`: Python logging level.
+- `ADMIN_IDS`: comma-separated Telegram user IDs that can see admin commands/menu and receive new-user notifications.
 
 ### Bot commands
 
@@ -68,6 +71,12 @@ Configuration values:
 - `/voices` — show common voice examples.
 - `/voice` — show the current voice.
 - `/voice ru-RU-SvetlanaNeural` — change voice for the current user/chat.
+
+Admin-only commands for users from `ADMIN_IDS`:
+
+- `/admin` — admin menu.
+- `/stats` — user and TTS request statistics.
+- `/users` — recent users list.
 
 ### Common voices
 
@@ -140,6 +149,7 @@ docker run --rm --env-file .env telegram-tts-bot
 - Лимит длины текста настраивается через `MAX_CHARS`.
 - Polling mode: не нужен webhook, публичный домен или SSL-сертификат.
 - Есть запуск через Docker и systemd.
+- Админ-меню/команды только для `ADMIN_IDS`: уведомления о новых пользователях, `/users`, `/stats`, `/admin`.
 
 ### Быстрый запуск
 
@@ -171,6 +181,7 @@ TTS_VOLUME=+0%
 MAX_CHARS=3500
 OUTPUT_DIR=/tmp/telegram-tts-bot
 LOG_LEVEL=INFO
+ADMIN_IDS=your_telegram_user_id
 ```
 
 Параметры:
@@ -182,6 +193,7 @@ LOG_LEVEL=INFO
 - `MAX_CHARS`: максимальная длина входного текста.
 - `OUTPUT_DIR`: временная папка для MP3-файлов.
 - `LOG_LEVEL`: уровень логирования Python.
+- `ADMIN_IDS`: Telegram user IDs через запятую — только они видят админ-команды/меню и получают уведомления о новых пользователях.
 
 ### Команды бота
 
@@ -190,6 +202,12 @@ LOG_LEVEL=INFO
 - `/voices` — примеры популярных голосов.
 - `/voice` — показать текущий голос.
 - `/voice ru-RU-SvetlanaNeural` — сменить голос для текущего пользователя/чата.
+
+Команды только для админов из `ADMIN_IDS`:
+
+- `/admin` — админ-меню.
+- `/stats` — статистика пользователей и TTS-запросов.
+- `/users` — список последних пользователей.
 
 ### Популярные голоса
 
