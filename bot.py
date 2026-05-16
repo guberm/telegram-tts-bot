@@ -11,6 +11,8 @@ import os
 import re
 import tempfile
 import uuid
+import asyncio
+import contextlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,6 +45,8 @@ DEFAULT_VOICE = os.getenv("TTS_VOICE", "ru-RU-DmitryNeural").strip()
 DEFAULT_RATE = os.getenv("TTS_RATE", "+0%").strip()
 DEFAULT_VOLUME = os.getenv("TTS_VOLUME", "+0%").strip()
 MAX_CHARS = int(os.getenv("MAX_CHARS", "3500"))
+TTS_TIMEOUT_SECONDS = int(os.getenv("TTS_TIMEOUT_SECONDS", "120"))
+SEND_TIMEOUT_SECONDS = int(os.getenv("SEND_TIMEOUT_SECONDS", "120"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", tempfile.gettempdir())).expanduser()
 PERSISTENCE_FILE = Path(os.getenv("PERSISTENCE_FILE", "data/bot-state.pickle")).expanduser()
 ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "").strip()) if part.isdigit()}
@@ -99,6 +103,8 @@ TEXTS = {
         "empty_text": "Send non-empty text.",
         "too_long": "Text is too long: {length} characters. Limit: {max_chars}.",
         "caption_voice": "Voice: {voice}",
+        "processing": "⏳ Generating audio… This can take a bit for long text.",
+        "sending_audio": "📤 Audio is ready, uploading…",
         "tts_failed": "Could not generate audio: {error}",
         "main_menu_button": "🌐 Language",
         "admin_menu_button": "👑 Admin",
@@ -167,6 +173,8 @@ TEXTS = {
         "empty_text": "Пришли непустой текст.",
         "too_long": "Текст слишком длинный: {length} символов. Лимит: {max_chars}.",
         "caption_voice": "Голос: {voice}",
+        "processing": "⏳ Генерирую аудио… Для длинного текста это может занять немного времени.",
+        "sending_audio": "📤 Аудио готово, загружаю…",
         "tts_failed": "Не смог сгенерировать аудио: {error}",
         "main_menu_button": "🌐 Язык",
         "admin_menu_button": "👑 Админ",
@@ -321,6 +329,14 @@ async def synthesize_mp3(text: str, voice: str = DEFAULT_VOICE) -> Path:
     )
     await communicate.save(str(out))
     return out
+
+
+async def keep_upload_action(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    """Keep Telegram's progress indicator alive during slow TTS generation/upload."""
+    while True:
+        with contextlib.suppress(Exception):
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_VOICE)
+        await asyncio.sleep(4)
 
 
 def log_update(update: Update, event: str) -> None:
@@ -481,26 +497,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     stats["requests"] += 1
     voice = context.user_data.get("voice", DEFAULT_VOICE)
     out: Path | None = None
+    status_message = None
+    action_task = None
     try:
-        await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_VOICE)
-        out = await synthesize_mp3(text, voice=voice)
+        status_message = await msg.reply_text(t(context, "processing"), reply_markup=main_menu(context, user_id))
+        action_task = asyncio.create_task(keep_upload_action(context, msg.chat_id))
+        log.info("Generating TTS: chat_id=%s user_id=%s chars=%s voice=%s", msg.chat_id, user_id, len(text), voice)
+        out = await asyncio.wait_for(
+            synthesize_mp3(text, voice=voice),
+            timeout=TTS_TIMEOUT_SECONDS,
+        )
+        log.info("TTS generated: chat_id=%s user_id=%s bytes=%s", msg.chat_id, user_id, out.stat().st_size)
         stats["tts_success"] += 1
+        with contextlib.suppress(Exception):
+            await status_message.edit_text(t(context, "sending_audio"))
         title = text[:45].replace("\n", " ")
         if len(text) > 45:
             title += "…"
         with out.open("rb") as audio_file:
-            await msg.reply_audio(
-                audio=audio_file,
-                title=title,
-                performer="TTS Bot",
-                caption=t(context, "caption_voice", voice=voice),
-                reply_markup=main_menu(context, user_id),
+            await asyncio.wait_for(
+                msg.reply_audio(
+                    audio=audio_file,
+                    title=title,
+                    performer="TTS Bot",
+                    caption=t(context, "caption_voice", voice=voice),
+                    reply_markup=main_menu(context, user_id),
+                ),
+                timeout=SEND_TIMEOUT_SECONDS,
             )
+        if status_message:
+            with contextlib.suppress(Exception):
+                await status_message.delete()
+        log.info("TTS audio sent: chat_id=%s user_id=%s", msg.chat_id, user_id)
     except Exception as exc:  # noqa: BLE001 - user-facing bot should not crash on one bad request
         stats["tts_failed"] += 1
         log.exception("TTS failed")
-        await msg.reply_text(t(context, "tts_failed", error=exc), reply_markup=main_menu(context, user_id))
+        error_text = t(context, "tts_failed", error=exc)
+        if status_message:
+            with contextlib.suppress(Exception):
+                await status_message.edit_text(error_text)
+        else:
+            await msg.reply_text(error_text, reply_markup=main_menu(context, user_id))
     finally:
+        if action_task:
+            action_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await action_task
         if out:
             try:
                 out.unlink(missing_ok=True)
