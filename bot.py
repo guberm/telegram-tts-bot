@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import uuid
 import asyncio
@@ -50,11 +52,17 @@ INWORLD_DEFAULT_VOICE = os.getenv("INWORLD_VOICE", "Ashley").strip() or "Ashley"
 INWORLD_LANGUAGE = os.getenv("INWORLD_LANGUAGE", "ru-RU").strip() or "ru-RU"
 INWORLD_DELIVERY_MODE = os.getenv("INWORLD_DELIVERY_MODE", "BALANCED").strip() or "BALANCED"
 INWORLD_API_KEY = os.getenv("INWORLD_API_KEY", "").strip()
+DEFAULT_LEADING_SILENCE_SECONDS = os.getenv("TTS_LEADING_SILENCE_SECONDS", "0").strip() or "0"
 TTS_MODELS = {
     "edge": "Edge TTS (free)",
     "inworld-tts-2": "Inworld Realtime TTS-2",
     "inworld-tts-1.5-mini": "Inworld TTS 1.5 Mini",
     "inworld-tts-1.5-max": "Inworld TTS 1.5 Max",
+}
+LEADING_SILENCE_OPTIONS = {
+    "0": 0.0,
+    "0.5": 0.5,
+    "1": 1.0,
 }
 EDGE_VOICE_EXAMPLES = [
     "ru-RU-DmitryNeural",
@@ -118,8 +126,9 @@ TEXTS = {
         "voices_inworld": "Inworld voice examples for {model_name}:\n{voices}\n\nUse: /voice Ashley\nRussian voices available: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Choose interface language:",
         "language_set": "Interface language set to English.",
-        "settings_prompt": "⚙️ Settings\nCurrent TTS model: {model_name}\n\nChoose model:",
+        "settings_prompt": "⚙️ Settings\nCurrent TTS model: {model_name}\nStart delay: {silence_label}\n\nChoose model or start delay:",
         "model_set": "TTS model set to: {model_name}",
+        "silence_set": "Start delay set to: {silence_label}",
         "settings_button": "⚙️ Settings",
         "current_voice": "Current model: {model_name}\nCurrent voice: {voice}\n{hint}",
         "invalid_voice": "This does not look like a valid voice for the current model. Example: /voice {example}",
@@ -182,8 +191,9 @@ TEXTS = {
         "voices_inworld": "Примеры голосов Inworld для {model_name}:\n{voices}\n\nИспользуй: /voice Ashley\nРусские голоса: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Выбери язык интерфейса:",
         "language_set": "Язык интерфейса: русский.",
-        "settings_prompt": "⚙️ Настройки\nТекущая TTS модель: {model_name}\n\nВыбери модель:",
+        "settings_prompt": "⚙️ Настройки\nТекущая TTS модель: {model_name}\nПауза перед стартом: {silence_label}\n\nВыбери модель или паузу:",
         "model_set": "TTS модель: {model_name}",
+        "silence_set": "Пауза перед стартом: {silence_label}",
         "settings_button": "⚙️ Настройки",
         "current_voice": "Текущая модель: {model_name}\nТекущий голос: {voice}\n{hint}",
         "invalid_voice": "Похоже на неверный голос для текущей модели. Пример: /voice {example}",
@@ -275,11 +285,33 @@ def get_tts_model_name(model: str) -> str:
     return TTS_MODELS.get(model, model)
 
 
-def model_keyboard(current_model: str) -> InlineKeyboardMarkup:
+def get_leading_silence(context: ContextTypes.DEFAULT_TYPE) -> float:
+    raw = str(context.user_data.get("leading_silence_seconds", DEFAULT_LEADING_SILENCE_SECONDS))
+    return LEADING_SILENCE_OPTIONS.get(raw, LEADING_SILENCE_OPTIONS.get(DEFAULT_LEADING_SILENCE_SECONDS, 0.0))
+
+
+def silence_key(seconds: float) -> str:
+    if seconds == 0:
+        return "0"
+    return str(seconds).rstrip("0").rstrip(".")
+
+
+def silence_label(seconds: float) -> str:
+    key = silence_key(seconds)
+    return f"{key}s"
+
+
+def settings_keyboard(current_model: str, current_silence: float) -> InlineKeyboardMarkup:
     rows = []
     for model, label in TTS_MODELS.items():
         prefix = "✅ " if model == current_model else ""
         rows.append([InlineKeyboardButton(prefix + label, callback_data=f"model:{model}")])
+    rows.append(
+        [
+            InlineKeyboardButton(("✅ " if current_silence == seconds else "") + f"Delay {key}s", callback_data=f"silence:{key}")
+            for key, seconds in LEADING_SILENCE_OPTIONS.items()
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -379,7 +411,57 @@ def require_admin(update: Update) -> bool:
     return is_admin(update.effective_user.id if update.effective_user else None)
 
 
-async def synthesize_mp3(text: str, model: str = "edge", voice: str = DEFAULT_VOICE) -> Path:
+def get_ffmpeg_exe() -> str:
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:  # noqa: BLE001 - surface clear user-facing error later
+        raise RuntimeError("ffmpeg is required to add a start delay; install imageio-ffmpeg or ffmpeg") from exc
+
+
+def prepend_silence_with_ffmpeg(mp3_path: Path, seconds: float) -> Path:
+    if seconds <= 0:
+        return mp3_path
+    ffmpeg = get_ffmpeg_exe()
+    delayed = mp3_path.with_name(f"{mp3_path.stem}_delay{silence_key(seconds).replace('.', '_')}{mp3_path.suffix}")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-t",
+        silence_key(seconds),
+        "-i",
+        "anullsrc=r=44100:cl=stereo",
+        "-i",
+        str(mp3_path),
+        "-filter_complex",
+        "[0:a][1:a]concat=n=2:v=0:a=1[a]",
+        "-map",
+        "[a]",
+        "-codec:a",
+        "libmp3lame",
+        "-q:a",
+        "4",
+        str(delayed),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    mp3_path.unlink(missing_ok=True)
+    return delayed
+
+
+async def add_leading_silence(mp3_path: Path, seconds: float) -> Path:
+    return await asyncio.to_thread(prepend_silence_with_ffmpeg, mp3_path, seconds)
+
+
+async def synthesize_mp3(text: str, model: str = "edge", voice: str = DEFAULT_VOICE, leading_silence: float = 0.0) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_DIR / f"tts_{uuid.uuid4().hex}.mp3"
     if model == "edge":
@@ -390,7 +472,7 @@ async def synthesize_mp3(text: str, model: str = "edge", voice: str = DEFAULT_VO
             volume=DEFAULT_VOLUME,
         )
         await communicate.save(str(out))
-        return out
+        return await add_leading_silence(out, leading_silence)
 
     if model.startswith("inworld-tts"):
         if not INWORLD_API_KEY:
@@ -409,7 +491,7 @@ async def synthesize_mp3(text: str, model: str = "edge", voice: str = DEFAULT_VO
             )
 
         await asyncio.to_thread(generate_inworld)
-        return out
+        return await add_leading_silence(out, leading_silence)
 
     raise ValueError(f"Unsupported TTS model: {model}")
 
@@ -496,9 +578,15 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     log_update(update, "settings")
     await register_user(update, context, "settings")
     model = get_tts_model(context)
+    leading_silence = get_leading_silence(context)
     await update.message.reply_text(
-        t(context, "settings_prompt", model_name=get_tts_model_name(model)),
-        reply_markup=model_keyboard(model),
+        t(
+            context,
+            "settings_prompt",
+            model_name=get_tts_model_name(model),
+            silence_label=silence_label(leading_silence),
+        ),
+        reply_markup=settings_keyboard(model, leading_silence),
     )
 
 
@@ -522,6 +610,27 @@ async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             hint=voice_hint_for_model(context, model),
         ),
         reply_markup=main_menu(context, user_id),
+    )
+
+
+async def silence_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log_update(update, "silence_callback")
+    await register_user(update, context, "silence_callback")
+    query = update.callback_query
+    await query.answer()
+    key = query.data.split(":", 1)[1]
+    seconds = LEADING_SILENCE_OPTIONS.get(key, 0.0)
+    context.user_data["leading_silence_seconds"] = silence_key(seconds)
+    model = get_tts_model(context)
+    await query.edit_message_text(t(context, "silence_set", silence_label=silence_label(seconds)))
+    await query.message.reply_text(
+        t(
+            context,
+            "settings_prompt",
+            model_name=get_tts_model_name(model),
+            silence_label=silence_label(seconds),
+        ),
+        reply_markup=settings_keyboard(model, seconds),
     )
 
 
@@ -646,6 +755,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     stats["requests"] += 1
     model = get_tts_model(context)
     voice = get_voice_for_model(context, model)
+    leading_silence = get_leading_silence(context)
     out: Path | None = None
     status_message = None
     action_task = None
@@ -653,15 +763,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         status_message = await msg.reply_text(t(context, "processing"), reply_markup=main_menu(context, user_id))
         action_task = asyncio.create_task(keep_upload_action(context, msg.chat_id))
         log.info(
-            "Generating TTS: chat_id=%s user_id=%s chars=%s model=%s voice=%s",
+            "Generating TTS: chat_id=%s user_id=%s chars=%s model=%s voice=%s leading_silence=%s",
             msg.chat_id,
             user_id,
             len(text),
             model,
             voice,
+            leading_silence,
         )
         out = await asyncio.wait_for(
-            synthesize_mp3(text, model=model, voice=voice),
+            synthesize_mp3(text, model=model, voice=voice, leading_silence=leading_silence),
             timeout=TTS_TIMEOUT_SECONDS,
         )
         log.info("TTS generated: chat_id=%s user_id=%s bytes=%s", msg.chat_id, user_id, out.stat().st_size)
@@ -751,6 +862,7 @@ def main() -> None:
     app.add_handler(CommandHandler("users", users_cmd))
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang:(en|ru)$"))
     app.add_handler(CallbackQueryHandler(model_callback, pattern=r"^model:(edge|inworld-tts-2|inworld-tts-1\.5-mini|inworld-tts-1\.5-max)$"))
+    app.add_handler(CallbackQueryHandler(silence_callback, pattern=r"^silence:(0|0\.5|1)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     log.info("Starting Telegram TTS bot with default voice %s and default language %s", DEFAULT_VOICE, DEFAULT_LANG)
