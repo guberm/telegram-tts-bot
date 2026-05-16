@@ -114,7 +114,7 @@ TEXTS = {
             "Change voice: /voice {voice_example}\n"
             "Change interface language: /language"
         ),
-        "voices_edge": "Edge TTS voice examples:\n{voices}\n\nFull Edge list on the server:\npython -m edge_tts --list-voices",
+        "voices_edge": "Edge TTS voice examples:\n{voices}\n\nUse: /voice ru-RU-SvetlanaNeural",
         "voices_inworld": "Inworld voice examples for {model_name}:\n{voices}\n\nUse: /voice Ashley\nRussian voices available: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Choose interface language:",
         "language_set": "Interface language set to English.",
@@ -178,7 +178,7 @@ TEXTS = {
             "Сменить голос: /voice {voice_example}\n"
             "Сменить язык интерфейса: /language"
         ),
-        "voices_edge": "Примеры голосов Edge TTS:\n{voices}\n\nПолный список Edge на сервере:\npython -m edge_tts --list-voices",
+        "voices_edge": "Примеры голосов Edge TTS:\n{voices}\n\nИспользуй: /voice ru-RU-SvetlanaNeural",
         "voices_inworld": "Примеры голосов Inworld для {model_name}:\n{voices}\n\nИспользуй: /voice Ashley\nРусские голоса: Dmitry, Elena, Nikolai, Svetlana.",
         "language_prompt": "Выбери язык интерфейса:",
         "language_set": "Язык интерфейса: русский.",
